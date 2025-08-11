@@ -3,7 +3,6 @@ import json
 import requests
 from flask import Flask, request
 from datetime import datetime
-from supabase import create_client, Client
 
 # --- 初始化 Flask App ---
 app = Flask(__name__)
@@ -11,11 +10,8 @@ app = Flask(__name__)
 # --- 从环境变量中安全地获取密钥 ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") # 这是具备读写权限的密钥
 KIMI_API_KEY = os.environ.get("KIMI_API_KEY") 
-
-# --- 初始化 Supabase 服务客户端 ---
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- 核心功能函数 ---
 def send_telegram_message(chat_id, text):
@@ -24,9 +20,6 @@ def send_telegram_message(chat_id, text):
     requests.post(api_url, json=payload)
 
 def analyze_task_with_ai(text):
-    # ... 这整个函数和之前完全一样，无需改动 ...
-    # 为了简洁，这里省略，请确保你粘贴的是下面完整的代码块
-    print("--- [面包屑 1] 进入 AI 分析函数 ---")
     api_url = "https://api.moonshot.cn/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -49,17 +42,13 @@ def analyze_task_with_ai(text):
         "response_format": {"type": "json_object"}
     }
     try:
-        print("--- [面包屑 2] 准备发起对 Kimi 的网络请求 ---")
         response = requests.post(api_url, headers=headers, data=json.dumps(payload), timeout=25)
-        print("--- [面包屑 3] 对 Kimi 的网络请求已完成 ---")
         response.raise_for_status()
         ai_response_data = response.json()
-        print("--- [面包屑 4] 成功获取 Kimi 的 JSON 数据 ---")
         result = json.loads(ai_response_data['choices'][0]['message']['content'])
-        print(f"--- [面包屑 5] Kimi 的最终分析结果: {result} ---")
         return result
     except Exception as e:
-        print(f"!!! [严重错误] AI 分析或解析过程中出现未知错误: {e}")
+        print(f"!!! [严重错误] AI 分析过程中出现错误: {e}")
         return None
 
 # --- Webhook主入口 ---
@@ -77,35 +66,42 @@ def handle_telegram_webhook():
             ai_result = analyze_task_with_ai(message_text)
 
             if ai_result and ai_result.get('task'):
-                print("--- [面包屑 6] 准备将任务存入 Supabase ---")
                 
-                # ↓↓↓【【【 最最关键的修改在这里 】】】↓↓↓
-                # 我们将所有数据都显式地转换为字符串，确保100%兼容
-                task_description_str = str(ai_result.get('task'))
-                deadline_value = ai_result.get('deadline')
-                deadline_str = str(deadline_value) if deadline_value is not None else "" # 如果是null，就存一个空字符串
+                # ↓↓↓【【【 这是最终的、决定性的修改 】】】↓↓↓
+                # 我们直接构造一个HTTP请求来写入Supabase，不再使用任何库
+                try:
+                    insert_url = f"{SUPABASE_URL}/rest/v1/todos"
+                    
+                    headers = {
+                        "apikey": SUPABASE_KEY, # 使用具备读写权限的 service_role key
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    }
+                    
+                    deadline_value = ai_result.get('deadline')
+                    
+                    insert_data = {
+                        'task_description': str(ai_result.get('task')),
+                        'deadline': str(deadline_value) if deadline_value is not None else "",
+                        'telegram_user_id': str(chat_id),
+                        'status': 'pending'
+                    }
 
-                insert_data = {
-                    'task_description': task_description_str,
-                    'deadline': deadline_str,
-                    'telegram_user_id': str(chat_id),
-                    'status': 'pending'
-                }
-                # ↑↑↑【【【 最最关键的修改在这里 】】】↑↑↑
+                    response = requests.post(insert_url, headers=headers, data=json.dumps(insert_data), timeout=15)
+                    response.raise_for_status() # 如果发生错误 (如 4xx, 5xx), 会抛出异常
 
-                result = supabase.table('todos').insert(insert_data).execute()
-                
-                if result.data:
-                     print("--- [面包屑 7] 任务成功存入 Supabase ---")
-                     task_name = ai_result.get('task')
-                     deadline = ai_result.get('deadline', '未指定时间')
-                     reply_text = f"好的！新的待办已记录：\n\n📝 任务: {task_name}\n⏰ 时间: {deadline}"
-                     send_telegram_message(chat_id, reply_text)
-                else:
-                    print(f"!!! [严重错误] 数据库保存失败: {result.error}")
+                    # 如果代码能走到这里，说明写入100%成功
+                    task_name = ai_result.get('task')
+                    deadline = ai_result.get('deadline', '未指定时间')
+                    reply_text = f"好的！新的待办已记录：\n\n📝 任务: {task_name}\n⏰ 时间: {deadline}"
+                    send_telegram_message(chat_id, reply_text)
+
+                except Exception as db_error:
+                    print(f"!!! [严重错误] 数据库写入失败: {db_error}")
                     send_telegram_message(chat_id, "哎呀，TDog的记事本好像出了点问题，没存上。")
+
             else:
-                print("--- AI 分析返回结果无效，无法继续 ---")
                 send_telegram_message(chat_id, "呜... TDog没太明白你的意思，可以换个说法吗？")
     except Exception as e:
         print(f"!!! [严重错误] 主程序出现未知异常: {e}")
