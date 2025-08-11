@@ -54,6 +54,7 @@ def handle_telegram_webhook():
 
             send_telegram_message(chat_id, "TDog正在思考中...")
             ai_result = analyze_task_with_ai(message_text)
+            print(f"--- AI Raw Response ---: {ai_result}")
 
             if ai_result and ai_result.get('task'):
                 insert_data = {
