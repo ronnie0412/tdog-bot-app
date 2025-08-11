@@ -2,7 +2,7 @@ import os
 import json
 import requests
 from flask import Flask, request
-from datetime import datetime  # <--- 我已经在这里加上了空格，修复了语法错误
+from datetime import datetime
 from supabase import create_client, Client
 
 # --- 初始化 Flask App ---
@@ -109,4 +109,12 @@ def handle_telegram_webhook():
                     send_telegram_message(chat_id, "哎呀，TDog的记事本好像出了点问题，没存上。")
             else:
                 # 如果ai_result是None或者里面没有'task'
-                print("--- AI 分析返回结果无效，无法继续 ---
+                # 我已经在这里加上了缺失的右括号
+                print("--- AI 分析返回结果无效，无法继续 ---")
+    except Exception as e:
+        print(f"!!! [严重错误] 主程序出现未知异常: {e}")
+    return 'OK', 200
+    
+# 供 Render 启动服务
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
